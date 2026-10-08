@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Environmental Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#e9f0ee;--ink:#14302a;--muted:#5c726b;--line:#c5d4cf;--panel:#f7faf9;
+--good:#2e9e5b;--sat:#7bbf3a;--mod:#e3b505;--poor:#ef8a17;--vpoor:#d9432f;--sev:#8c1c3a}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;line-height:1.5}
+.wrap{max-width:1040px;margin:0 auto;padding:28px 20px 60px}
+header{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;border-bottom:2px solid var(--ink);padding-bottom:14px}
+h1{margin:0;font-size:clamp(1.6rem,4vw,2.4rem);font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--muted);margin:4px 0 0}
+.status{display:flex;align-items:center;gap:8px;font-weight:600}
+.dot{width:12px;height:12px;border-radius:50%;background:var(--vpoor)}
+.dot.on{background:var(--good)}
+.node{display:grid;grid-template-columns:200px 1fr 220px;gap:20px;align-items:center;padding:22px 0;border-bottom:1px solid var(--line)}
+.node h2{margin:0;font-size:1.3rem;text-transform:capitalize}
+.coords{color:var(--muted);font-size:.85rem}
+.aqi{font-size:3.4rem;font-weight:800;line-height:1;margin-top:8px}
+.cat{display:inline-block;margin-top:6px;padding:2px 10px;border-radius:99px;color:#fff;font-weight:600;font-size:.85rem;background:var(--muted)}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.metrics div{border-left:3px solid var(--line);padding-left:10px}
+.metrics b{display:block;font-size:1.5rem}
+.metrics span{color:var(--muted);font-size:.85rem}
+svg.spark{width:100%;height:64px}
+.flag{color:var(--vpoor);font-size:.8rem;min-height:1.2em}
+.empty{color:var(--muted)}
+h3{margin:34px 0 8px}
+table{width:100%;border-collapse:collapse;font-size:.9rem;background:var(--panel)}
+th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line)}
+th{background:#dbe7e3}
+.scroll{overflow-x:auto}
+@media(max-width:760px){.node{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <h1>Live Environmental Monitor</h1>
+    <p class="sub">Readings from the Part 1 data acquisition framework, received over MQTT</p>
+  </div>
+  <div class="status" role="status"><span class="dot" id="dot"></span><span id="statusText">Connecting to broker</span></div>
+</header>
+<main id="nodes"><p class="empty" id="empty">Waiting for data. Start <code>part1_data_acquisition_v2.py</code> and readings will appear here within 5 seconds.</p></main>
+<h3>Latest readings</h3>
+<div class="scroll"><table>
+<thead><tr><th>Time</th><th>Node</th><th>Temp (&deg;C)</th><th>Humidity (%)</th><th>AQI</th><th>Gas</th><th>PM2.5</th></tr></thead>
+<tbody id="log"></tbody></table></div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
+<script>
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+const TOPIC = "ievm/+/data";
+const HISTORY = 40;
+const data = {};   // node_id -> {latest, history[]}
+
+function category(aqi){
+  // CPCB AQI categories
+  if (aqi <= 50)  return ["Good","var(--good)"];
+  if (aqi <= 100) return ["Satisfactory","var(--sat)"];
+  if (aqi <= 200) return ["Moderate","var(--mod)"];
+  if (aqi <= 300) return ["Poor","var(--poor)"];
+  if (aqi <= 400) return ["Very poor","var(--vpoor)"];
+  return ["Severe","var(--sev)"];
+}
+
+function spark(values, color){
+  if (values.length < 2) return "";
+  const w = 220, h = 64, min = Math.min(...values), max = Math.max(...values);
+  const span = (max - min) || 1;
+  const pts = values.map((v,i)=>`${(i/(values.length-1))*w},${h-6-((v-min)/span)*(h-12)}`).join(" ");
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="AQI trend"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+}
+
+function render(){
+  const root = document.getElementById("nodes");
+  const ids = Object.keys(data).sort();
+  if (!ids.length) return;
+  document.getElementById("empty")?.remove();
+  root.innerHTML = ids.map(id=>{
+    const d = data[id].latest, [label,color] = category(d.aqi);
+    const flags = (d.quality_flags||[]).join(", ");
+    return `<section class="node" aria-label="${id}">
+      <div><h2>${id}</h2><div class="coords">${d.lat}, ${d.lon}</div>
+        <div class="aqi" style="color:${color}">${d.aqi}</div><span class="cat" style="background:${color}">${label}</span></div>
+      <div><div class="metrics">
+        <div><b>${d.temp}&deg;C</b><span>Temperature</span></div>
+        <div><b>${d.humidity}%</b><span>Humidity</span></div>
+        <div><b>${d.gas}</b><span>Gas</span></div>
+        <div><b>${d.pm25}</b><span>PM2.5</span></div></div>
+        <div class="flag">${flags ? "Data quality: " + flags : ""}</div></div>
+      <div>${spark(data[id].history.map(x=>x.aqi), color)}<div class="coords">${(d.timestamp||"").replace("T"," ")}</div></div>
+    </section>`;
+  }).join("");
+}
+
+function addLog(d){
+  const tb = document.getElementById("log");
+  const tr = document.createElement("tr");
+  tr.innerHTML = `<td>${(d.timestamp||"").replace("T"," ")}</td><td>${d.node_id}</td><td>${d.temp}</td><td>${d.humidity}</td><td>${d.aqi}</td><td>${d.gas}</td><td>${d.pm25}</td>`;
+  tb.prepend(tr);
+  while (tb.children.length > 15) tb.lastChild.remove();
+}
+
+const client = mqtt.connect(BROKER, {reconnectPeriod: 2000});
+const dot = document.getElementById("dot"), txt = document.getElementById("statusText");
+client.on("connect", ()=>{ dot.classList.add("on"); txt.textContent = "Connected to broker"; client.subscribe(TOPIC); });
+client.on("close",   ()=>{ dot.classList.remove("on"); txt.textContent = "Disconnected, retrying"; });
+client.on("message", (topic, msg)=>{
+  try {
+    const d = JSON.parse(msg.toString());
+    const id = d.node_id || topic.split("/")[1];
+    d.node_id = id;
+    data[id] = data[id] || {history: []};
+    data[id].latest = d;
+    data[id].history.push(d);
+    if (data[id].history.length > HISTORY) data[id].history.shift();
+    render(); addLog(d);
+  } catch(e){ console.error("Bad message", e); }
+});
+</script>
+</body>
+</html>
