@@ -8,7 +8,7 @@ New in v2:
 import csv
 import json
 import math
-import os
+import os  
 import random
 import time
 from collections import deque
@@ -23,8 +23,8 @@ MQTT_PORT = 1883
 TOPIC_BASE = "ievm"            # topic = ievm/<node_id>/data
 PUBLISH_INTERVAL = 5           # seconds
 
-USE_LIVE_API = True          # set True after adding API key
-OWM_API_KEY = "jawahar1411"
+USE_LIVE_API = False         # set True after adding API key
+OWM_API_KEY = "YOUR_OPENWEATHERMAP_KEY"
 
 CSV_FILE = "environment_log.csv"
 BUFFER_MAX = 10000             # max readings kept while offline
